@@ -1,14 +1,39 @@
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const sgMail = require('@sendgrid/mail');
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+// Disable body parsing to get raw body for signature verification
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).end();
   }
 
-  const event = req.body;
-  
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    // Get raw body
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const body = Buffer.concat(chunks);
+
+    // Verify Stripe signature
+    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const customerEmail = session.customer_details.email;
@@ -17,11 +42,18 @@ module.exports = async function handler(req, res) {
     const currency = session.currency.toUpperCase();
     const paymentDate = new Date(session.created * 1000).toLocaleString('da-DK');
     
-    // Send download email to customer
-    await sendDownloadEmail(customerEmail, customerName);
-    
-    // Send notification email to you
-    await sendSaleNotification(customerEmail, customerName, amountPaid, currency, paymentDate);
+    try {
+      // Send download email to customer
+      await sendDownloadEmail(customerEmail, customerName);
+      
+      // Send notification email to you
+      await sendSaleNotification(customerEmail, customerName, amountPaid, currency, paymentDate);
+      
+      console.log('Emails sent successfully');
+    } catch (emailError) {
+      console.error('Email sending failed:', emailError);
+      return res.status(500).json({ error: 'Email sending failed' });
+    }
   }
   
   res.status(200).json({ received: true });
