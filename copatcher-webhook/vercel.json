@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "webhook.js": {
+      "runtime": "@vercel/node"
+    }
+  }
+}
+
