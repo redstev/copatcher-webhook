@@ -4,70 +4,91 @@ const sgMail = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 module.exports = async function handler(req, res) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, stripe-signature');
+  console.log('🚀 Webhook function started');
+  console.log('Method:', req.method);
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+
+  // Check environment variables
+  console.log('Environment check:');
+  console.log('STRIPE_SECRET_KEY exists:', !!process.env.STRIPE_SECRET_KEY);
+  console.log('SENDGRID_API_KEY exists:', !!process.env.SENDGRID_API_KEY);
+  console.log('STRIPE_WEBHOOK_SECRET exists:', !!process.env.STRIPE_WEBHOOK_SECRET);
+  console.log('COPATCHER_DOWNLOAD_URL exists:', !!process.env.COPATCHER_DOWNLOAD_URL);
 
   if (req.method !== 'POST') {
+    console.log('❌ Method not POST');
     return res.status(405).send('Method Not Allowed');
   }
 
   const sig = req.headers['stripe-signature'];
+  console.log('Stripe signature exists:', !!sig);
+
   let event;
 
   try {
-    // Get raw body for Stripe signature verification
+    console.log('📥 Reading raw body...');
     const chunks = [];
     for await (const chunk of req) {
       chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     }
     const rawBody = Buffer.concat(chunks);
+    console.log('Raw body length:', rawBody.length);
 
-    // Verify Stripe signature
+    console.log('🔐 Verifying Stripe signature...');
     event = stripe.webhooks.constructEvent(
       rawBody,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
+    console.log('✅ Signature verified, event type:', event.type);
   } catch (err) {
     console.error('❌ Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle the event
   if (event.type === 'checkout.session.completed') {
+    console.log('💰 Handling checkout completion...');
     const session = event.data.object;
+    console.log('Session ID:', session.id);
+    
     const customerEmail = session.customer_details?.email;
     const customerName = session.customer_details?.name || 'Friend';
+    console.log('Customer email:', customerEmail);
+    console.log('Customer name:', customerName);
+
+    if (!customerEmail) {
+      console.error('❌ No customer email found');
+      return res.status(400).json({ error: 'No customer email' });
+    }
+
     const amountPaid = (session.amount_total / 100).toFixed(2);
     const currency = session.currency.toUpperCase();
     const paymentDate = new Date(session.created * 1000).toLocaleString('da-DK');
 
-    if (!customerEmail) {
-      console.error('❌ No customer email found in session');
-      return res.status(400).json({ error: 'No customer email' });
-    }
-
     try {
-      // Send download email to customer
+      console.log('📧 Sending download email...');
       await sendDownloadEmail(customerEmail, customerName);
+      console.log('✅ Download email sent');
       
-      // Send notification email to you
+      console.log('📧 Sending notification email...');
       await sendSaleNotification(customerEmail, customerName, amountPaid, currency, paymentDate);
+      console.log('✅ Notification email sent');
       
-      console.log('✅ Emails sent successfully');
     } catch (emailError) {
       console.error('❌ Email sending failed:', emailError);
-      return res.status(500).json({ error: 'Email sending failed' });
+      console.error('Error details:', emailError.response?.body || emailError.message);
+      return res.status(500).json({ error: 'Email sending failed', details: emailError.message });
     }
+  } else {
+    console.log('⏭️ Ignoring event type:', event.type);
   }
 
-  res.status(200).json({ received: true });
+  console.log('✅ Webhook completed successfully');
+  res.status(200).json({ received: true, eventType: event.type });
 };
 
-// Customer download email
 async function sendDownloadEmail(email, name) {
+  console.log('Preparing download email for:', email);
   const msg = {
     to: email,
     from: 'copat@copatcher.com',
@@ -94,11 +115,12 @@ async function sendDownloadEmail(email, name) {
     `
   };
   
+  console.log('Sending email via SendGrid...');
   await sgMail.send(msg);
 }
 
-// Sale notification email to you
 async function sendSaleNotification(customerEmail, customerName, amount, currency, date) {
+  console.log('Preparing notification email...');
   const msg = {
     to: '279sdh@gmail.com',
     from: 'copat@copatcher.com',
@@ -116,14 +138,10 @@ async function sendSaleNotification(customerEmail, customerName, amount, currenc
           <p><strong>Amount:</strong> ${amount} ${currency}</p>
           <p><strong>Date:</strong> ${date}</p>
         </div>
-        
-        <div style="text-align: center; margin: 30px 0;">
-          <p style="font-size: 24px; margin: 0;">🚀 ANOTHER HAPPY COPATCHER USER! 🚀</p>
-          <p style="color: #ffd700; font-style: italic; margin: 10px 0;">The empire grows stronger...</p>
-        </div>
       </div>
     `
   };
   
+  console.log('Sending notification via SendGrid...');
   await sgMail.send(msg);
 }
